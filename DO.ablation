@@ -1,0 +1,86 @@
+#!/bin/bash
+#PBS -N STORM_ABLATION
+#PBS -l select=1:ncpus=1:mem=12gb:ngpus=1:accelerator_model=a100:arch=zen2
+#PBS -A DialSys
+#PBS -q CUDA
+#PBS -l walltime=20:00:00
+#PBS -j oe
+#PBS -o logs/ablation_job.log
+# 1. Load System Modules
+source $HOME/.bashrc
+module load Miniconda/3
+
+# 2. Activate Environment (Using your direct path bypass just in case!)
+source activate storm_a100
+
+PROJECT_FOLDER="/gpfs/project/yom96kov/storm-public"
+cd "$PROJECT_FOLDER"
+
+# Helper function to run 5 seeds for a specific configuration
+run_5_seeds() {
+    local EXP_NAME=$1
+    local EXTRA_ARGS=$2
+    
+    for SEED in 42 43 44 45 46
+    do
+        OUT_DIR="results_noisebench/${EXP_NAME}/seed_${SEED}"
+        mkdir -p ${OUT_DIR}
+        echo "=================================================="
+        echo "Running ${EXP_NAME} - Seed ${SEED}"
+        echo "=================================================="
+        
+        python3 storm.py \
+            --task_name="noisebench" \
+            --train_file="train_ner_waek.pt" \
+            --validation_file="dev_ner_weak.pt" \
+            --test_file="test_ner_weak.pt" \
+            --model_type="roberta" \
+            --model_name_or_path="${PROJECT_FOLDER}/roberta_local" \
+            --train_batch_size=32 \
+            --eval_batch_size=32 \
+            --learning_rate=2e-5 \
+            --num_train_epochs=10 \
+            --output_dir=${OUT_DIR} \
+            --local_files_only \
+            --evaluate_rescaling \
+            --save_checkpoints \
+            --save_stats \
+            --lr_scheduler_type="cosine" \
+            --warmup_proportion=0.1 \
+            --seed=${SEED} \
+            ${EXTRA_ARGS}
+    done
+}
+
+# ---------------------------------------------------------
+# 🧪 GROUP 1: THE BASELINES (No Rescaler Active)
+# ---------------------------------------------------------
+
+# 1. Pure Baseline (No rescaler, no weights, no amplifier)
+run_5_seeds "exp1_pure_baseline" "--simulate_only"
+
+# 2. Weights ONLY Baseline (No rescaler, but uses math weights)
+run_5_seeds "exp2_weights_baseline" "--simulate_only --use_class_weights"
+
+# 3. Amplifier ONLY Baseline (No rescaler, but uses entity density amplifier)
+run_5_seeds "exp3_amplifier_baseline" "--simulate_only --use_entity_amplifier"
+
+# (Note: Enhanced Baseline with Weights + Amplifier + No Rescaler = 0.7114 from previous runs)
+
+
+# ---------------------------------------------------------
+# ⚡ GROUP 2: THE STORM RUNS (Rescaler Active at 0.4 Bound)
+# ---------------------------------------------------------
+
+# 4. Pure STORM (Rescaler ON, but NO weights and NO amplifier)
+run_5_seeds "exp4_pure_storm" "--rescaler_lower_bound=0.4"
+
+# 5. STORM + Weights ONLY (Rescaler ON, Weights ON, Amplifier OFF)
+run_5_seeds "exp5_storm_weights" "--use_class_weights --rescaler_lower_bound=0.4"
+
+# 6. STORM + Amplifier ONLY (Rescaler ON, Weights OFF, Amplifier ON)
+run_5_seeds "exp6_storm_amplifier" "--use_entity_amplifier --rescaler_lower_bound=0.4"
+
+# (Note: STORM + Weights + Amplifier = 0.7179 from the Sweep results)
+
+echo "All 30 Ablation Runs Complete!"

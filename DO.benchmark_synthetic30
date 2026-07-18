@@ -1,0 +1,64 @@
+#!/bin/bash
+#PBS -N STORM_BENCH_SYN30
+#PBS -l select=1:ncpus=1:mem=12gb:ngpus=1:accelerator_model=a100:arch=zen2
+#PBS -A DialSys
+#PBS -q CUDA
+#PBS -l walltime=20:00:00
+#PBS -j oe
+#PBS -o logs/benchmark_synthetic30.log
+# 1. Load System Modules
+source $HOME/.bashrc
+module load Miniconda/3
+source activate storm_a100
+PROJECT_FOLDER="/gpfs/project/yom96kov/storm-public"
+cd "$PROJECT_FOLDER"
+
+# Your newly calculated weights for 30% Synthetic Noise
+MATH_WEIGHTS="1.3704,1.5088,1.3709,1.3365,1.6826,1.6205,1.4831,1.4498,0.4355"
+
+run_5_seeds() {
+    local RUN_TYPE=$1
+    local EXTRA_ARGS=$2
+    
+    for SEED in 42 43 44 45 46
+    do
+        OUT_DIR="results_benchmarks/synthetic30_data/${RUN_TYPE}/seed_${SEED}"
+        mkdir -p ${OUT_DIR}
+        echo "Running ${RUN_TYPE} on Synthetic 30 Data - Seed ${SEED}"
+        
+        python3 storm.py \
+            --task_name="noisebench" \
+            --train_file="train_ner_synthetic30.pt" \
+            --validation_file="dev_ner_clean.pt" \
+            --test_file="test_ner_clean.pt" \
+            --model_type="roberta" \
+            --model_name_or_path="${PROJECT_FOLDER}/roberta_local" \
+            --train_batch_size=32 \
+            --eval_batch_size=32 \
+            --learning_rate=2e-5 \
+            --num_train_epochs=10 \
+            --output_dir=${OUT_DIR} \
+            --local_files_only \
+            --evaluate_rescaling \
+            --save_checkpoints \
+            --save_stats \
+            --lr_scheduler_type="cosine" \
+            --warmup_proportion=0.1 \
+            --seed=${SEED} \
+            ${EXTRA_ARGS}
+    done
+}
+
+# Run 1: Vanilla Baseline (No Rescaler, No Custom Methods)
+run_5_seeds "pure_baseline" "--simulate_only"
+
+# Run 2: Enhanced Baseline (No Rescaler, BUT Custom Methods Active)
+run_5_seeds "enhanced_baseline" "--simulate_only --use_class_weights --use_entity_amplifier --custom_weights=${MATH_WEIGHTS}"
+
+# Run 3: Pure STORM (Rescaler Active, NO Custom Methods)
+run_5_seeds "pure_storm" "--rescaler_lower_bound=0.4"
+
+# Run 4: Full Proposed Architecture (Rescaler Active + Custom Methods Active)
+run_5_seeds "storm_full" "--use_class_weights --use_entity_amplifier --rescaler_lower_bound=0.4 --custom_weights=${MATH_WEIGHTS}"
+
+echo "Synthetic 30 Benchmark Complete!"

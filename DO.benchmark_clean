@@ -1,0 +1,63 @@
+#!/bin/bash
+#PBS -N STORM_BENCH_CLEAN
+#PBS -l select=1:ncpus=1:mem=12gb:ngpus=1:accelerator_model=a100:arch=zen2
+#PBS -A DialSys
+#PBS -q CUDA
+#PBS -l walltime=15:00:00
+#PBS -j oe
+#PBS -o logs/benchmark_clean.log
+
+source $HOME/.bashrc
+module load Miniconda/3
+source activate storm_a100
+PROJECT_FOLDER="/gpfs/project/yom96kov/storm-public"
+cd "$PROJECT_FOLDER"
+
+MATH_WEIGHTS="1.834,2.5,1.7932,1.8115,5.002,3.9124,2.368,2.1621,0.3669"
+
+run_5_seeds() {
+    local RUN_TYPE=$1
+    local EXTRA_ARGS=$2
+    
+    for SEED in 42 43 44 45 46
+    do
+        OUT_DIR="results_benchmarks/clean_data/${RUN_TYPE}/seed_${SEED}"
+        mkdir -p ${OUT_DIR}
+        echo "Running ${RUN_TYPE} on Clean Data - Seed ${SEED}"
+        
+        python3 storm.py \
+            --task_name="noisebench" \
+            --train_file="train_ner_clean.pt" \
+            --validation_file="dev_ner_clean.pt" \
+            --test_file="test_ner_clean.pt" \
+            --model_type="roberta" \
+            --model_name_or_path="${PROJECT_FOLDER}/roberta_local" \
+            --train_batch_size=32 \
+            --eval_batch_size=32 \
+            --learning_rate=2e-5 \
+            --num_train_epochs=10 \
+            --output_dir=${OUT_DIR} \
+            --local_files_only \
+            --evaluate_rescaling \
+            --save_checkpoints \
+            --save_stats \
+            --lr_scheduler_type="cosine" \
+            --warmup_proportion=0.1 \
+            --seed=${SEED} \
+            ${EXTRA_ARGS}
+    done
+}
+
+# Run 1: Vanilla Baseline (No Rescaler, No Custom Methods)
+run_5_seeds "pure_baseline" "--simulate_only"
+
+# Run 2: Enhanced Baseline (No Rescaler, BUT Custom Methods Active)
+run_5_seeds "enhanced_baseline" "--simulate_only --use_class_weights --use_entity_amplifier --custom_weights=${MATH_WEIGHTS}"
+
+# Run 3: Pure STORM (Rescaler Active, NO Custom Methods)
+run_5_seeds "pure_storm" "--rescaler_lower_bound=0.4"
+
+# Run 4: Full Proposed Architecture (Rescaler Active + Custom Methods Active)
+run_5_seeds "storm_full" "--use_class_weights --use_entity_amplifier --rescaler_lower_bound=0.4 --custom_weights=${MATH_WEIGHTS}"
+
+echo "Clean Benchmark Complete!"

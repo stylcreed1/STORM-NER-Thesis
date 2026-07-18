@@ -1,0 +1,65 @@
+#!/bin/bash
+#PBS -N STORM_CROWD30
+#PBS -l select=1:ncpus=1:mem=12gb:ngpus=1:accelerator_model=a100:arch=zen2
+#PBS -A DialSys
+#PBS -q CUDA
+#PBS -l walltime=20:00:00
+#PBS -j oe
+#PBS -o logs/benchmark_crowd30_nobound.log
+
+module load Miniconda/3
+
+# 2. Activate Environment
+source activate storm_a100
+PROJECT_FOLDER="/gpfs/project/yom96kov/storm-public"
+cd "$PROJECT_FOLDER"
+
+# 🛑 PASTE YOUR CORRECTED CROWD30 WEIGHTS HERE
+MATH_WEIGHTS="1.7998,2.6419,1.9597,1.8937,5.0271,4.2345,2.6142,2.2252,0.3636"
+
+run_5_seeds() {
+    local RUN_TYPE=$1
+    local EXTRA_ARGS=$2
+    
+    for SEED in 42 43 44 45 46
+    do
+        OUT_DIR="results_benchmarks/crowd30_data/${RUN_TYPE}/seed_${SEED}"
+        mkdir -p ${OUT_DIR}
+        echo "Running ${RUN_TYPE} on Mixed Crowd30 Data - Seed ${SEED}"
+        
+        python3 storm.py \
+            --task_name="noisebench" \
+            --train_file="train_ner_crowd30.pt" \
+            --validation_file="dev_ner_clean.pt" \
+            --test_file="test_ner_clean.pt" \
+            --model_type="roberta" \
+            --model_name_or_path="${PROJECT_FOLDER}/roberta_local" \
+            --train_batch_size=32 \
+            --eval_batch_size=32 \
+            --learning_rate=2e-5 \
+            --num_train_epochs=10 \
+            --output_dir=${OUT_DIR} \
+            --local_files_only \
+            --evaluate_rescaling \
+            --save_checkpoints \
+            --save_stats \
+            --lr_scheduler_type="cosine" \
+            --warmup_proportion=0.1 \
+            --seed=${SEED} \
+            ${EXTRA_ARGS}
+    done
+}
+
+# Run 1: Vanilla Baseline 
+run_5_seeds "pure_baseline" "--simulate_only"
+
+# Run 2: Enhanced Baseline (Custom Methods Active)
+run_5_seeds "enhanced_baseline" "--simulate_only --use_class_weights --use_entity_amplifier --custom_weights=${MATH_WEIGHTS}"
+
+# Run 3: Pure STORM 
+run_5_seeds "pure_storm" "--rescaler_lower_bound=0.0"
+
+# Run 4: Full Proposed Architecture 
+run_5_seeds "storm_full" "--use_class_weights --use_entity_amplifier --rescaler_lower_bound=0.0 --custom_weights=${MATH_WEIGHTS}"
+
+echo "Crowd30 Benchmark Complete!"
